@@ -71,6 +71,7 @@
 #include "gimplayer-floating-selection.h"
 #include "gimplayermask.h"
 #include "gimplayerstack.h"
+#include "gimplinklayer.h"
 #include "gimpmarshal.h"
 #include "gimppalette.h"
 #include "gimpparasitelist.h"
@@ -3011,6 +3012,14 @@ gimp_image_get_xcf_version (GimpImage    *image,
            * PERCEPTUAL.
            */
           version = MAX (23, version);
+        }
+
+      /* Need version 24 TODO for link layers. */
+      if (GIMP_IS_LINK_LAYER (layer))
+        {
+          ADD_REASON (g_strdup_printf (_("Link layers were added in %s"),
+                                       "GIMP TODO"));
+          version = MAX (14, version);
         }
     }
   g_list_free (items);
