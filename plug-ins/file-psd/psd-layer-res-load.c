@@ -238,6 +238,7 @@ static gint     load_type             (const PSDlayerres     *res_a,
                                        const gchar           *class_id,
                                        const gchar           *key,
                                        const gchar           *type,
+                                       JsonNode	             *node,
                                        GError               **error);
 
 
@@ -794,6 +795,8 @@ load_resource_lfx (const PSDlayerres  *res_a,
       IFDBG(3) g_debug ("Objects based effects layer info: object effects version: %u, descriptor version: %u", oe_version, desc_version);
 
       g_printerr ("create root object\n");
+      // TODO: Probably should add some version number to the root in case we
+      //       need to make changes to how we store this info in the future!
       root = json_node_new (JSON_NODE_OBJECT);
       if (! root)
         {
@@ -1863,15 +1866,16 @@ load_descriptor (const PSDlayerres  *res_a,
   JsonArray  *arr = NULL;
 
   //// FOR NOW:
-  JsonNode *dummy = NULL;
+  JsonNode *local = NULL;
   JsonNode *root  = NULL;
 
   if (! base_node)
     {
 
-      dummy = json_node_new (JSON_NODE_OBJECT);
+      local = json_node_new (JSON_NODE_OBJECT);
       obj = json_object_new ();
-      json_node_init_object (root, obj);
+      json_node_init_object (local, obj);
+      base_node = local;
     }
   else
     {
@@ -1921,6 +1925,7 @@ load_descriptor (const PSDlayerres  *res_a,
       gchar *key;
       gchar  type[4];
       gint   res;
+      JsonNode *node;
 
       IFDBG(3) g_debug ("Offset: %" G_GOFFSET_FORMAT, PSD_TELL(input));
 
@@ -1938,7 +1943,12 @@ load_descriptor (const PSDlayerres  *res_a,
         }
       IFDBG(3) g_debug ("Item: %d, key: %s type: %.4s", i, key, type);
 
-      res = load_type (res_a, lyr_a, input, classID_string, key, type, error);
+      node = NULL;
+      res = load_type (res_a, lyr_a, input, classID_string, key, type, node, error);
+      if (node)
+        {
+          json_array_add_array_element (arr, node);
+        }
       g_free (key);
       if (res < 0)
         return res;
@@ -1993,8 +2003,11 @@ load_type (const PSDlayerres  *res_a,
            const gchar        *class_id,
            const gchar        *key,
            const gchar        *type,
+           JsonNode	          *node,
            GError            **error)
 {
+  g_printerr ("load type for key %s\n", key);
+
   if (memcmp (type, "obj ", 4) == 0)
     {
       /* Reference structure*/
@@ -2004,10 +2017,10 @@ load_type (const PSDlayerres  *res_a,
   else if (memcmp (type, "Objc", 4) == 0)
     {
       /* Descriptor structure*/
-      gint res;
+      gint      res;
 
       IFDBG(3) g_debug ("Objc Descriptor begin");
-      res = load_descriptor (res_a, lyr_a, NULL, input, error);
+      res = load_descriptor (res_a, lyr_a, node, input, error);
       IFDBG(3) g_debug ("Objc Descriptor end");
       if (res < 0)
         return res;
@@ -2015,8 +2028,11 @@ load_type (const PSDlayerres  *res_a,
   else if (memcmp (type, "VlLs", 4) == 0)
     {
       /* List */
-      gint32 list_items = 0;
-      gint32 li;
+      gint32      list_items = 0;
+      gint32      li;
+      JsonArray  *arr;
+      JsonNode   *local;
+      JsonObject *obj;
 
       if (psd_read (input, &list_items, 4, error) < 4)
         {
@@ -2026,10 +2042,23 @@ load_type (const PSDlayerres  *res_a,
       list_items = GUINT32_FROM_BE (list_items);
       IFDBG(3) g_debug ("Number of items in list: %i", list_items);
 
+      g_printerr ("create local json object\n");
+      local = json_node_new (JSON_NODE_OBJECT);
+      obj = json_object_new ();
+      json_node_init_object (local, obj);
+      json_object_set_string_member (obj, "key", key);
+      json_object_set_int_member (obj, "count", list_items);
+
+      g_printerr ("create array\n");
+      arr = json_array_new ();
+      node = json_node_new (JSON_NODE_ARRAY);
+      json_object_set_array_member (obj, key, arr);
+      g_printerr ("Process items in list\n");
+
       for (li = 0; li < list_items; li++)
         {
-          gchar type[4];
-          gint  res;
+          gchar     type[4];
+          gint      res;
 
           if (psd_read (input, &type, 4, error) < 4)
             {
@@ -2038,9 +2067,15 @@ load_type (const PSDlayerres  *res_a,
             }
           IFDBG(3) g_debug ("Item: %d, type: %.4s", li, type);
 
-          res = load_type (res_a, lyr_a, input, class_id, key, type, error);
+          node = NULL;
+          res = load_type (res_a, lyr_a, input, class_id, key, node, type, error);
           if (res < 0)
             return res;
+          g_printerr ("Add node array element\n");
+          if (node)
+            json_array_add_element (arr, node);
+          else
+            g_printerr ("Failed to add array element!\n");
         }
     }
   else if (memcmp (type, "doub", 4) == 0)
@@ -2058,6 +2093,8 @@ load_type (const PSDlayerres  *res_a,
       val = (gpointer) &tmp;
 
       IFDBG(3) g_debug ("double value: %f", *val);
+      node = json_node_new (JSON_NODE_VALUE);
+      json_node_set_double (node, *val);
     }
   else if (memcmp (type, "UntF", 4) == 0)
     {
@@ -2080,6 +2117,9 @@ load_type (const PSDlayerres  *res_a,
       val = (gpointer) &tmp;
 
       IFDBG(3) g_debug ("Float: %.4s, value: %f", floatkey, *val);
+
+      node = json_node_new (JSON_NODE_VALUE);
+      json_node_set_double (node, *val);
     }
   else if (memcmp (type, "UnFl ", 4) == 0)
     {
@@ -2140,6 +2180,8 @@ load_type (const PSDlayerres  *res_a,
           lyr_a->text.info = strdup (str);
           g_printerr ("Saved text to layer record: '%s'\n", lyr_a->text.info);
         }
+      node = json_node_new (JSON_NODE_VALUE);
+      json_node_set_string (node, str);
       g_free (str);
     }
   else if (memcmp (type, "enum", 4) == 0)
@@ -2151,6 +2193,8 @@ load_type (const PSDlayerres  *res_a,
       valueID = load_key (input, error);
       IFDBG(3) g_debug ("Enum name: %s, value: %s",
                         nameID, valueID);
+      node = json_node_new (JSON_NODE_VALUE);
+      json_node_set_string (node, valueID);
       g_free (nameID);
       g_free (valueID);
     }
@@ -2191,6 +2235,9 @@ load_type (const PSDlayerres  *res_a,
           return -1;
         }
       IFDBG(3) g_debug ("Boolean value: %u", (gboolean) val);
+
+      node = json_node_new (JSON_NODE_VALUE);
+      json_node_set_boolean (node, val);
     }
   else if (memcmp (type, "GlbO", 4) == 0)
     {
