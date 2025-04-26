@@ -2,10 +2,13 @@
 
 case $(readlink /proc/$$/exe) in
   *bash)
+    echo "I am bash"
     set -o posix
     ;;
 esac
 set -e
+
+set -o
 
 if [ -z "$GITLAB_CI" ]; then
   # Make the script work locally
