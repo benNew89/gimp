@@ -32,7 +32,7 @@ GIMP_DIR="$PWD/"
 cd ${GIMP_DIR}${PARENT_DIR}
 if [ "$GITLAB_CI" ]; then
   apt-get update >/dev/null 2>&1
-  apt-get install -y --no-install-recommends ca-certificates wget curl binutils debuginfod >/dev/null 2>&1
+  apt-get install -y --no-install-recommends ca-certificates wget curl binutils unzip debuginfod >/dev/null 2>&1
 fi
 export HOST_ARCH=$(uname -m)
 export APPIMAGE_EXTRACT_AND_RUN=1
@@ -44,9 +44,10 @@ if [ ! "$(find $GIMP_DIR -maxdepth 1 -iname "AppDir*")" ] || [ "$MODE" = '--bund
   fi
   bundler="$PWD/go-appimagetool.AppImage"
   rm -f "$bundler" >/dev/null
-  wget -c https://github.com/$(wget -q https://github.com/probonopd/go-appimage/releases/expanded_assets/continuous -O - | grep "appimagetool-.*-${HOST_ARCH}.AppImage" | head -n 1 | cut -d '"' -f 2) >/dev/null 2>&1
+  wget https://github.com/user-attachments/files/20739013/appimagetool.zip
+  unzip -o appimagetool.zip
   bundler_text="go-appimagetool build: $(echo appimagetool-*.AppImage | sed -e 's/appimagetool-//' -e "s/-${HOST_ARCH}.AppImage//")"
-  mv appimagetool-*.AppImage $bundler
+  mv appimagetool-*${HOST_ARCH}*.AppImage $bundler
   chmod +x "$bundler"
 fi
 
@@ -191,6 +192,26 @@ bund_usr ()
         echo "(INFO): bundling $target_path to $output_dest_path"
         mkdir -p $dest_path
         cp -ru $target_path $dest_path >/dev/null 2>&1 || continue
+        
+        #Process .typelib dependencies
+        if echo "$target_path" | grep -q '\.typelib$'; then
+          process_typelib()
+          {
+            for typelib in $(g-ir-inspect --print-typelibs "$(basename "$1" | sed 's/-.*//')" | sed 's/typelib: //g'); do
+              case "$typelib_list" in
+                *"$typelib"*)
+                  ;;
+                *)
+                  export typelib_list="$typelib_list $typelib "
+                  echo "COPYING $typelib"
+                  cp -ru $(echo "$UNIX_PREFIX/${LIB_DIR}/${LIB_SUBDIR}girepository-*/${typelib}.typelib") "$dest_path" >/dev/null 2>&1 || $true
+                  process_typelib "$typelib"
+                  ;;
+              esac
+            done
+          }
+          process_typelib "$target_path"
+        fi
 
         #Additional parameters for special situations
         if [ "$3" = '--dest' ] || [ "$3" = '--rename' ]; then
@@ -341,8 +362,9 @@ bund_usr "$GIMP_PREFIX" "lib/pkgconfig/gimp*"
 bund_usr "$GIMP_PREFIX" "lib/pkgconfig/babl*"
 bund_usr "$GIMP_PREFIX" "lib/pkgconfig/gegl*"
 ### Introspected plug-ins
-bund_usr "$GIMP_PREFIX" "lib/girepository-*"
-bund_usr "$UNIX_PREFIX" "lib/girepository-*"
+bund_usr "$GIMP_PREFIX" "lib/girepository-*/*.typelib"
+bund_usr "$UNIX_PREFIX" "lib/girepository-*" --bundler
+echo $appended_typelib_list
 conf_app GI_TYPELIB_PATH "${LIB_DIR}/${LIB_SUBDIR}girepository-*"
 #### JavaScript plug-ins support
 bund_usr "$UNIX_PREFIX" "bin/gjs*"
@@ -367,7 +389,7 @@ bund_usr "$GIMP_PREFIX" 'bin/gimp*'
 bund_usr "$GIMP_PREFIX" "bin/gegl"
 bund_usr "$GIMP_PREFIX" "share/applications/*.desktop"
 #go-appimagetool have too polluted output so we save as log. See: https://github.com/probonopd/go-appimage/issues/314
-"$bundler" -s deploy $(echo "$USR_DIR/share/applications/*.desktop") &> appimagetool.log || cat appimagetool.log
+"$bundler" -s deploy $(echo "$USR_DIR/share/applications/*.desktop")
 
 ## Manual adjustments after running the bundling tool
 ### Undo the mess which breaks babl and GEGL. See: https://github.com/probonopd/go-appimage/issues/315
