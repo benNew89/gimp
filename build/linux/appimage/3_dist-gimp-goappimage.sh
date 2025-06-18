@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Parameters
 REVISION="$1"
